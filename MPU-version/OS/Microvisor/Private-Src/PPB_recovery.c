@@ -2,6 +2,8 @@
 #include "PPB_handlers.h"
 #include "simulator_common.h"
 #include "stm32l4xx_hal.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 /**

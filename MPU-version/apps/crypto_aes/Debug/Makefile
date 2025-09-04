@@ -6,12 +6,12 @@ PROJECT_NAME = crypto_aes
 ######################################
 # MCU-Fortifier Toolchain
 ######################################
-INSTRUMENTER_PATH = $(PYTHON_PATH) /home/emanuele/Desktop/Code/MCU-fortifier/OS/Utils/instrumenter.py
+INSTRUMENTER_PATH = $(PYTHON_PATH) /home/io/lavoro/crosscon/baremetal-tee/MPU-version/OS/Utils/instrumenter.py
 
 ######################################
 # GNU Arm Embedded Toolchain Path
 ######################################
-GCC_PATH = /home/emanuele/st/stm32cubeide_1.15.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.12.3.rel1.linux64_1.0.200.202406132123/tools/bin
+GCC_PATH = /opt/stm32cubeide/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.linux64_1.0.0.202410170706/tools/bin
 PREFIX = arm-none-eabi-
 
 ######################################

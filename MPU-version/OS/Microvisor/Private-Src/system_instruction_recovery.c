@@ -3,18 +3,21 @@
 #include "virtual_IPSR.h"
 
 /**
- * Simulates the execution of CPS (system instruction) using the original context 
+ * Simulates the execution of CPS (system instruction) using the original context
  * stored in the auto_frame and manual_frame
  * CPS is a 16 bit wide instruction, so it is necessary to set the length to 2
- * 
+ *
  * Parameters:
- * faulty_inst: used to maintain the same standard signature 
+ * faulty_inst: used to maintain the same standard signature
  * (not used in this context as CPS does not have any parameters)
  * auto_frame: pointer to frame created automatically during exception entry
  * manual_frame: pointer to frame created manually before calling this function
  *
 */
 void Simulate_CPS(unsigned int faulty_inst, unsigned int* auto_frame, unsigned int* manual_frame) {
+    // TODO: IFB
+    // TODO: If both I and F are set to 0 the behaviour is unpredictable. It is not the case to execute it.
+    // TODO: I think the design should address the case where FAULTMASK is set as it would block any control interrupt (such as the ExceptionReturn).
 	Simulate_Faulty_Instruction(auto_frame, manual_frame, 2);
 	return;
 }
@@ -25,26 +28,35 @@ void Simulate_CPS(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
 * stored in the auto_frame and manual_frame
 * MRS is a 32 bit wide instruction, so it is necessary to set the length to 4
 *
-* Parameters: 
-* faulty_inst: instruction to simulate (MRS in this case) with the necessary parameters (e.g. destination register) 
+* Parameters:
+* faulty_inst: instruction to simulate (MRS in this case) with the necessary parameters (e.g. destination register)
 * auto_frame: pointer to frame created automatically during exception entry
 * manual_frame: pointer to frame created manually before calling this function
 */
 void Simulate_MRS(unsigned int faulty_inst, unsigned int* auto_frame, unsigned int* manual_frame) {
-	/* 
+	/*
 	* Extract parameters from the MRS instruction:
 	* SYSm: system control space (SCS) register
 	* read_IPSR: if 1, read IPSR register
 	* rd: destination register
 	 */
 	unsigned int SYSm = (faulty_inst & SYS_M_MASK) >> SYS_M_SHIFT;
+    // TODO: why SYSm & 1? This condition would be true also for PSP, BASEPRI, FAULTMASK.
 	unsigned int read_IPSR = SYSm & 0x1;
 	unsigned int rd = (faulty_inst & MRS_RD_MASK) >> MRS_RD_SHIFT;
-	
+
 	/* Simulate the instruction */
+    // TODO: not the case to use a generic exec function.
+    // This operation must be executed in an instruction aware environment.
+    // In particular only the original lr, pc, sp should be modified, not the currently running ones.
+    // Also any other register could generate problems.
+    // I think it is better to create a function that stores the value in r0 like a return value.
+    // TODO: Also information exposure can be a vulnerability, whitelist only the needed special registers or virtualize.
 	Simulate_Faulty_Instruction(auto_frame, manual_frame, 4);
-	
+
 	if (read_IPSR) {
+        // TODO: what does "unprioritized handler" mean? Which are the scenarios?
+
 		/* When requesting IPSR read, substitute original IPSR value
 		with virtual IPSR value. No need to check if we are in unprioritized
 		handler or not, because the virtual IPSR will reflect the correct
@@ -63,13 +75,13 @@ void Simulate_MRS(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
 * stored in the auto_frame and manual_frame
 * MSR is a 32 bit wide instruction, so it is necessary to set the length to 4
 *
-* Parameters: 
-* faulty_inst: instruction to simulate (MSR in this case) with the necessary parameters 
+* Parameters:
+* faulty_inst: instruction to simulate (MSR in this case) with the necessary parameters
 * auto_frame: pointer to frame created automatically during exception entry
 * manual_frame: pointer to frame created manually before calling this function
 */
 void Simulate_MSR(unsigned int faulty_inst, unsigned int* auto_frame, unsigned int* manual_frame) {
-	/* 
+	/*
 	* Extract parameters from the MRS instruction:
 	* SYSm: system control space (SCS) register
 	* rn: source register
@@ -78,6 +90,9 @@ void Simulate_MSR(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
 	unsigned int rn = (faulty_inst & MSR_RN_MASK) >> MSR_RN_SHIFT;
 
 	/* Prevent the MSR instruction to override the fileds that control the stack pointer and privilege level */
+    // TODO: The privilege flag is not the only way to obtain privileges. We must also avoid arbitrary code execution.
+    // TODO: For example avoid writing to the MSP once the CA is enforced to run on PSP. Virtualize the stack pointers.
+    // TODO: Whitelist, not blacklist.
 	if ((SYSm ^ MSR_SYS_M_CTRL_PATTERN) == 0) {
 		/* MSR instruction attempting to write CONTROL register, must prevent changes to nPRIV */
 		/* nPRIV field controls the privilege level of Thread mode */
@@ -87,6 +102,7 @@ void Simulate_MSR(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
 		unsigned int curr_nPRIV = curr_CONTROL & 0b1;	// isolate nPRIV bit
 		rn_value = (rn_value & ~0b1) | curr_nPRIV;	// overwrite nPRIV target value
 
+        // TODO: the CA MUST NOT run on the MSP like the handler.
 		if (Is_Deprioritized_Handler_Active()) {
 			/* Code is ment to run in Handler mode, prevent changes to SPSEL */
 			/* SPSEL field controls the current stack pointer */
@@ -95,9 +111,17 @@ void Simulate_MSR(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
 		}
 
 		Set_Register_Value(rn, auto_frame, manual_frame, rn_value);	// save operand register value
-	}	
+    }
+
+    // TODO: TOCTOU.
 
 	/* Simulate the instruction */
+    // TODO: not the case to use a generic exec function.
+    // This operation must be executed in an instruction aware environment.
+    // In particular only the original lr, pc, sp should be read, not the currently running ones.
+    // Also any other register could generate problems.
+    // I think it is better to create a function that stores the value in r0 like a return value.
+    // TODO: Also information exposure can be a vulnerability, whitelist only the needed special registers or virtualize.
 	Simulate_Faulty_Instruction(auto_frame, manual_frame, 4);
 	return;
 }
@@ -107,7 +131,7 @@ void Simulate_MSR(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
  * instruction (CPS, MRS, MSR) with privileges. If it was, the instruction is simulated
  * while making sure that CONTROL.nPRIV is not altered (unprivileged code should never
  * be able to alter it).
- * 
+ *
  * Parameters:
  *  auto_frame:
  *      pointer to frame created automatically during exeption entry
@@ -117,7 +141,7 @@ void Simulate_MSR(unsigned int faulty_inst, unsigned int* auto_frame, unsigned i
  *      pointer to frame created manually before calling this function, contains the rest
  *      of the context not saved automatically by exception entry (R4-R11 and EXC_RETURN (LR))
  *      is always stored on the Main Stack.
- * 
+ *
  * Returns:
  * SYS_INST_OK: if the instruction was successfully simulated
  * SYS_INST_FAIL: if the instruction could not be simulated
@@ -149,7 +173,7 @@ int Recover_System_Instruction(unsigned int* auto_frame, unsigned int* manual_fr
 		return SYS_INST_OK;
 	}
 
-	/* If the instruction is neither a CPS, MRS or MSR the instruction 
+	/* If the instruction is neither a CPS, MRS or MSR the instruction
 	is not a system one and the simulation is not needed */
 	return SYS_INST_NOREQ;
 }

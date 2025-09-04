@@ -12,7 +12,7 @@ MICROVISOR_ELF = $(PROJECT_NAME).elf
 ######################################
 # GNU Arm Embedded Toolchain Path
 ######################################
-GCC_PATH = /opt/st/stm32cubeide_1.18.1/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.linux64_1.0.0.202410170706/tools/bin
+GCC_PATH = /opt/stm32cubeide/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.linux64_1.0.0.202410170706/tools/bin
 PREFIX = arm-none-eabi-
 
 ######################################

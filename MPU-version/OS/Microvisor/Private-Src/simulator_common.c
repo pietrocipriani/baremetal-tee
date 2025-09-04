@@ -145,13 +145,19 @@ void Set_Register_Value(unsigned int reg_num, unsigned int* auto_frame, unsigned
 	return;
 }
 
+/* TODO: false assumption. You comply with the AACPS if the instruction flow and the stack is not altered. */
+/*
+ * TODO: A contract must be specified: The only usable registers are R0-R3 that are not supposed to be modified.
+ * If other registers are specified you move the value manually afterward (or beforehand depending on the scenario).
+ */
+/* TODO: I think a C function is is better, there should be nothing (?) that needs asm */
 /**
  * Executes an in-memory routine ensuring the context
  * is the one before the exception entry (except for registers SP,LR and PC).
  * Additionally before returning the functions saves the modified context onto
  * the pointers and restores all the callee-preserved registers to their original
  * value, thus complying with the AAPCS.
- * 
+ *
  * Parameters:
  *  - address: memory location of the in memory routine
  *  - auto_frame: pointer to auto_frame
@@ -165,16 +171,18 @@ __attribute__((naked)) void Run_With_Context(unsigned int* address, unsigned int
 		"mov lr, r0\n"							// mov function address to LR
 		"mov r12, r1\n"							// mov auto_frame address to R12
 		"mov r11, r2\n"							// mov manual_fram address to R11
-		
+
 		/* Restore context */
 		"ldr r0, [r12, #28]\n"	  // read stacked APSR (Application Program Status Register)
 		"msr APSR_nzcvq, r0\n"	  // restore APSR
 		"ldm r12, {r0,r1,r2,r3,r12}\n"
 		"ldm r11, {r4,r5,r6,r7,r8,r9,r10,r11}\n"
-		
+
 		/* Branch to in-memory routine */
 		"orr lr, #1\n"	// thumb instruction set bit
 		"blx lr\n"   // branch to in-memory routine to execute it
+        /* TODO: if lr or pc (if possible) is modified it will not return there: arbitrary code execution */
+        /* TODO: if sp is modified the context will change: unpredictable behaviour */
 
 		/* Save modified context */
 		"ldr lr, [sp]\n"				// load auto_frame address to LR
@@ -186,7 +194,7 @@ __attribute__((naked)) void Run_With_Context(unsigned int* address, unsigned int
 		"str r0, [lr, #28]\n"			// update stacked xPSR
 		"ldr lr, [sp, 4]\n"				// load manual_fram address to LR
 		"stm lr, {r4,r5,r6,r7,r8,r9,r10,r11}\n"	// save modified r4-r11
-		
+
 		/* Cleanup and return */
 		"pop {r1,r2}\n"		// pop auto_frame and manual_frame values stored in stack
 		"pop {r4,r5,r6,r7,r8,r9,r10,r11,lr}\n"	//restore callee-reserved registers
@@ -210,9 +218,10 @@ __attribute__((naked)) void Run_With_Context(unsigned int* address, unsigned int
  * SIMULATION_NOMEM: if there was no memory available for the in-memory function
  *
  */
+/* TODO: instr_len could be greater than the autoframe size. Contract. */
 void Simulate_Faulty_Instruction(unsigned int* auto_frame, unsigned int* manual_frame, unsigned int inst_len) {
 	/* Allocate space for in-memory function */
-	unsigned char* funct_ptr = (unsigned char*) &simulation_mem;  // create pointer to simulation memory	
+	unsigned char* funct_ptr = (unsigned char*) &simulation_mem;  // create pointer to simulation memory
 	unsigned char* inst_ptr = (unsigned char*) auto_frame[6]; // pointer to faulty instruction (stored in the autoframe, in particular in the PC register)
 
 	/* Copy faulty instruction to simulation memory */
@@ -243,6 +252,7 @@ void Simulate_Faulty_Instruction(unsigned int* auto_frame, unsigned int* manual_
  * - 0 for an invalid address (outside PPB, MPU control)
  * - 1 for a valid address (remaining PPB)
  */
+// TODO: whitelist of accessible entries.
 int Is_PPB_Address_Valid(unsigned int target_address) {
 	if(PPB_START <= target_address && target_address <= PPB_END) {
 		if(MPU_START <= target_address && target_address <= MPU_END)	// invalid when trying to access MPU settings
@@ -264,6 +274,7 @@ int Is_PPB_Address_Valid(unsigned int target_address) {
  * - SIMULATOR_RO_WI for read-only, write-ignored access
  * - SIMULATOR_NO_ACCESS for no access
  */
+// TODO: whitelist of accessible entries.
 uint32_t Simulator_Get_Permission(uint32_t target_address) {
 	if(PPB_START <= target_address && target_address <= PPB_END) {
 		if(MPU_START <= target_address && target_address <= MPU_END)	// access to MPU configuration not allowed

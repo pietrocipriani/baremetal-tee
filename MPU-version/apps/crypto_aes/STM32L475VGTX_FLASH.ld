@@ -159,6 +159,7 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
+
   /* Used by the startup to initialize data */
   _sidata = LOADADDR(.data);
 

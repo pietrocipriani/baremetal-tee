@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "tee_client_api.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -127,6 +128,16 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_RNG_Init();
+
+  printf("Test\r\n");
+  __io_putchar('T');
+  __io_putchar('e');
+  __io_putchar('s');
+  __io_putchar('t');
+  __io_putchar('!');
+  __io_putchar('\n');
+
+
   /* USER CODE BEGIN 2 */
   TEEC_Context ctx;
   TEEC_Session sn;
@@ -161,6 +172,7 @@ int main(void)
 
   // Init the message to encrypt and print it
   memcpy(op.params[0].tmpref.buffer, "Secret-Message!\0", 16);
+  printf("Test\r\n");
   printf("CA wants to encrypt this message with AES: %s\r\n", op.params[0].tmpref.buffer);
 
   // Make the TA generate the AES Key

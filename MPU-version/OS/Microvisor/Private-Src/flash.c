@@ -135,6 +135,7 @@ int base64_encode(const unsigned char *input, size_t input_len, char *output, si
 		}
 	}
 
+    // TODO: output_len -1 ???
     output[output_len -1] = '\0';
 
     return required_size;
@@ -366,6 +367,7 @@ static int flash_init(uint32_t ta_id)
 
     char *str = cJSON_PrintUnformatted(p);
     if(!str){
+        // TODO:check that `objects` are deleted.
         cJSON_Delete(p);
         return -1;
     }
@@ -477,6 +479,7 @@ int flash_writeNewObject(const char* ctx, uint32_t len, int obj_id, uint32_t ta_
     }
 
 
+    // TODO: use the function you created...
     int encoded_len = 4 * ((len + 2) / 3); // base64 encode output length
     if(free_size < encoded_len)
         return -1;
@@ -562,16 +565,20 @@ uint32_t flash_getFreeSize(uint32_t ta_id)
     flash_getConfig(ta_id, &start_addr, &total_size);
 
     /* If flash is fully empty, the readed all value must be 255 */
+    // TODO: What is CALC_FREE_SIZE_OFF? Can it be > total_size?
     memcpy(buff, (void*)start_addr, CALC_FREE_SIZE_OFF);
+    // TODO: these are not the "readed all value"...
     if((buff[0] == 255) && (buff[CALC_FREE_SIZE_OFF - 1] == 255))
         return total_size;
 
     for(uint32_t i=0; i<total_size; i += CALC_FREE_SIZE_OFF)
     {
         memcpy(buff, (void*)(start_addr + i), CALC_FREE_SIZE_OFF);
+        // TODO: Oh... all the burden with base64 and json just to avoid 255 to be a valid value?
         if(buff[CALC_FREE_SIZE_OFF - 1] != 255)
             continue;
         //End of the objects array, that means end of the content is finded
+        // TODO: can fail if the "]}" is aligned with the chunk... With the previous chunk the ckeck is ignored, and all the following pages are 0xff.
         offset = search(buff, CALC_FREE_SIZE_OFF, ']', '}');
         if(offset != -1){
             free_size = total_size - (offset + i + 2); // +2 for the some extra character end of the content like } or etc.
@@ -612,6 +619,7 @@ int flash_deleteObject(uint32_t ta_id, int obj_id)
         goto end;
     
     int index;
+    // TODO: magic number? Is this enforced anywhere?
     for(index=0; index<=32; ++index)
     {
         cJSON* item = cJSON_GetArrayItem(objects, index);

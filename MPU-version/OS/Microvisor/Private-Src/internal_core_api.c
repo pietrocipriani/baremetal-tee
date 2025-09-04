@@ -37,6 +37,7 @@ int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t 
     uint32_t random_value;
     size_t i;
 
+    // TODO: no magic numbers
     for (i = 0; i < len / 4; i++)
     {
         random_value = rng_get();
@@ -79,6 +80,7 @@ __attribute__((section(".heap_core"))) static Block* freeListTA2 = {0};
 __attribute__((section(".heap_core"))) static Block* freeListTEEcore = {0};
 
 //These will be used to keep track of the various objects and operations created by the TAs
+// TODO: if efficiency is needed we can try with an Open-Hash hash table
 __attribute__((section(".ram-boot"))) __TEE_ObjectHandle * registeredObjects[MAX_HANDLES] = {0};
 __attribute__((section(".ram-boot"))) __TEE_OperationHandle * registeredOperations[MAX_HANDLES] = {0};
  
@@ -102,7 +104,10 @@ static uint8_t check_mem_ownership(uint8_t ta_num, void * buffer, size_t size)
         return 0;
     }
     uintptr_t object = (uintptr_t)buffer;
+    // TODO: check integer overflow.
     uintptr_t object_end = object + size;
+
+    // TODO: I would say that these are useless checks, redundancy for fault injections?
     if(size > TA1_MEMORY_END_ADDR - TA1_MEMORY_START_ADDR){
         return 0; //Invalid size
     }
@@ -137,6 +142,8 @@ static uint8_t check_mem_ownership(uint8_t ta_num, void * buffer, size_t size)
  */
 static uint8_t check_object_ownership(uint8_t ta_num, TEE_ObjectHandle object)
 {
+    // TODO: can I assume that registeredObjects is not tampered?
+    // In case any ptr can be put in this could be used for information disclosure.
     if(object == NULL){
         ERR_MSG("Object is NULL");
         return 0;
@@ -195,6 +202,7 @@ static void free_object(__TEE_ObjectHandle * temp_obj){
  *   @param temp_obj Pointer to the object or operation to populate
  *   @return 1 if the object or operation was successfully populated, 0 otherwise
  */
+// TODO: Check the contract: temp_obj needs to be validated?
 static uint8_t populate_object(__TEE_ObjectHandle * temp_obj){
     uint8_t populated = 0;
     for(int i=0; i<MAX_HANDLES; i++){
@@ -248,6 +256,7 @@ void heap_erase()
 // Set the correct values for the heap memory of each TA when they are first used
 static void init_memory(int ta_num) 
 {
+    // TODO: assuming the size is enough for at least a Block header.
     if(ta_num == CORE_NUM){
         freeListTEEcore->size = CORE_HEAP_SIZE - sizeof(Block);
         freeListTEEcore->next = NULL;
@@ -265,13 +274,13 @@ static void init_memory(int ta_num)
 
 /**
  * @brief Allocate a memory area of a given size using the heap memory of the TA
- * 
+ *
  * @param ta_num TA number (1 or 2)
  * @param size Size of the memory area to allocate
  * @param hint Hint for the allocation (e.g., TEE_MALLOC_FILL_ZERO)
  */
 void* internal_TEE_Malloc(size_t size, uint32_t hint, uint8_t ta_num)
-{   
+{
     Block* curr = NULL;
 
     if( ta_num == CORE_NUM){
@@ -303,18 +312,23 @@ void* internal_TEE_Malloc(size_t size, uint32_t hint, uint8_t ta_num)
                 return NULL;
             }
         }
-        curr = freeListTA2;   
+        curr = freeListTA2;
     }
 
     while (curr != NULL)
     {
+        // TODO: readability
+
         //Check whether the pointer is within the valid memory range for the TA
+        // TODO: more appropriate validation! Not only the Block but also the Block area must be contained in the heap!
+        // TODO: check integer overflow!
         if(curr < (ta_num == CORE_NUM ? TEE_CORE_MEMORY_START_ADDR : (ta_num == 1 ? TA1_MEMORY_START_ADDR : TA2_MEMORY_START_ADDR)) ||
             curr + sizeof(Block) > (ta_num == CORE_NUM ? TEE_CORE_MEMORY_END_ADDR : (ta_num == 1 ? TA1_MEMORY_END_ADDR : TA2_MEMORY_END_ADDR))){
             return NULL;
         }
         if ((curr->free) && (curr->size >= size))
         {
+            // TODO: duplicated check.
             if(
                 (ta_num == CORE_NUM && curr + sizeof(Block) > TEE_CORE_MEMORY_END_ADDR) ||
                 (ta_num == 1 && curr + sizeof(Block) > TA1_MEMORY_END_ADDR) ||
@@ -322,10 +336,12 @@ void* internal_TEE_Malloc(size_t size, uint32_t hint, uint8_t ta_num)
             ){
                 //We ran out of memory!!
                 return NULL;
-            } 
+            }
             if (curr->size > size + sizeof(Block))
             {
-                Block* newBlock = (Block*)((uint32_t*)curr + sizeof(Block) + size); 
+                // TODO: buffer overflow!!!!
+                // curr + sizeof(Block) <= END_ADDR doesn't imply that curr + sizeof(Block) + size <= END_ADDR!!!
+                Block* newBlock = (Block*)((uint32_t*)curr + sizeof(Block) + size);
                 newBlock->size = curr->size - size - sizeof(Block);
                 newBlock->next = curr->next;
                 newBlock->free = 1;
@@ -335,6 +351,7 @@ void* internal_TEE_Malloc(size_t size, uint32_t hint, uint8_t ta_num)
             curr->free = 0;
 
             if(hint == TEE_MALLOC_FILL_ZERO)
+                // TODO: buffer overflow!
             	memset((uint32_t*)curr + sizeof(Block) , 0, size); 
 
             return (void*)((uint32_t*)curr + sizeof(Block));
@@ -356,12 +373,14 @@ void internal_TEE_Free(void* buffer, uint8_t ta_num)
         return;
     }
 
+    // TODO: TEE_CORE_MEMORY_START_ADDR <= buffer - sizeof(Block) < buffer <= TEE_CORE_MEMORY_END_ADDR
     if(ta_num == CORE_NUM) {
         if((buffer  - sizeof(Block) < TEE_CORE_MEMORY_START_ADDR) || (buffer - sizeof(Block) > TEE_CORE_MEMORY_END_ADDR)){
             ERR_MSG("Free function error");
             return;
         }
     } else if (ta_num == 1) {
+        // TODO: with shared memory and protected CA memory this must be changed!
         if((buffer - sizeof(Block) < TA1_MEMORY_START_ADDR) || (buffer - sizeof(Block) > TA1_MEMORY_END_ADDR)){
             if (buffer - sizeof(Block) < CA_MEMORY_START_ADDR || buffer - sizeof(Block) > CA_MEMORY_END_ADDR) {
                 ERR_MSG("Free function error");
@@ -369,6 +388,7 @@ void internal_TEE_Free(void* buffer, uint8_t ta_num)
             }
         }
     } else if (ta_num == 2) {
+        // TODO: with shared memory and protected CA memory this must be changed!
         if((buffer - sizeof(Block) < TA2_MEMORY_START_ADDR) || (buffer - sizeof(Block) > TA2_MEMORY_END_ADDR)){
     	    if (buffer - sizeof(Block) < CA_MEMORY_START_ADDR || buffer - sizeof(Block) > CA_MEMORY_END_ADDR) {
                 ERR_MSG("Free function error");
@@ -377,11 +397,12 @@ void internal_TEE_Free(void* buffer, uint8_t ta_num)
         }
     }
 
+    // TODO: Contract! In case of wrong ta_num the flow will be able to reach this and perform a buffer overflow!
     Block* block = (Block*)((uint32_t*)buffer - sizeof(Block));
     if(block){
         block->free = 1;
     }
-    
+
 
     // Get the head of the free list for this TA
     Block* head = NULL;
@@ -392,12 +413,13 @@ void internal_TEE_Free(void* buffer, uint8_t ta_num)
     } else if (ta_num == 2) {
         head = freeListTA2;
     }
-    
+
 
     // Coalesce adjacent free blocks
     Block* curr = head;
     while (curr != NULL) {
         // Merge with next if both are free
+        // TODO: fully tainted! Buffer overflow!!!
         while (curr->free && curr->next && curr->next->free) {
             curr->size += sizeof(Block) + curr->next->size;
             curr->next = curr->next->next;
@@ -417,9 +439,12 @@ void internal_TEE_Free(void* buffer, uint8_t ta_num)
  * @param ta_num TA number (1 or 2)
  */
 void internal_TEE_MemMove(void* dest, void* src, size_t size, uint8_t ta_num)
-{    
+{
+    // TODO: function to check boundaries.
+    // TODO: it is desiderable that this doesn't only operate on heap but on full ram?
+    // TODO: integer overflow.
     if(ta_num == CORE_NUM){
-        if( 
+        if(
             (dest < TEE_CORE_MEMORY_START_ADDR) || (dest + size > TEE_CORE_MEMORY_END_ADDR) ||
             (src < TEE_CORE_MEMORY_START_ADDR) || (src + size  > TEE_CORE_MEMORY_END_ADDR) 
         ){
@@ -431,6 +456,7 @@ void internal_TEE_MemMove(void* dest, void* src, size_t size, uint8_t ta_num)
             (dest < TA1_MEMORY_START_ADDR) || (dest + size> TA1_MEMORY_END_ADDR) ||
             (src < TA1_MEMORY_START_ADDR) || (src + size > TA1_MEMORY_END_ADDR) 
         ){
+            // TODO: TA should not be able to manipulate directly the CA memory.
             if (dest < CA_MEMORY_START_ADDR || dest + size > CA_MEMORY_END_ADDR) {
                 ERR_MSG("Mem move error");
     	        return;
@@ -441,6 +467,7 @@ void internal_TEE_MemMove(void* dest, void* src, size_t size, uint8_t ta_num)
             (dest < TA2_MEMORY_START_ADDR) || (dest + size  > TA2_MEMORY_END_ADDR) ||
             (src < TA2_MEMORY_START_ADDR) || (src + size  > TA2_MEMORY_END_ADDR)
         ){
+            // TODO: TA should not be able to manipulate directly the CA memory.
     	    if (dest < CA_MEMORY_START_ADDR || dest + size > CA_MEMORY_END_ADDR) {
                 ERR_MSG("Mem move function error");
     	        return;
@@ -448,6 +475,7 @@ void internal_TEE_MemMove(void* dest, void* src, size_t size, uint8_t ta_num)
         }
     }
 
+    // TODO: is this trusted to not copy data anywhere else?
 	memmove(dest, src, size);
 
 }
@@ -463,6 +491,7 @@ void internal_TEE_MemMove(void* dest, void* src, size_t size, uint8_t ta_num)
  */
 void internal_TEE_MemFill(void* buffer, uint8_t x, size_t size, uint8_t ta_num)
 {
+    // TODO: same observations as MemMove
 
     if (ta_num == CORE_NUM){
         if(
@@ -502,7 +531,7 @@ void internal_TEE_MemFill(void* buffer, uint8_t x, size_t size, uint8_t ta_num)
  * @brief Allocate a transient object with the given type and max size
  * 
  * @param objectType please check the global platform documentation page 141, table 5.9
- * @param maxObjectSize max key size
+ * @param maxObjectSize max key size in bits
  * @param object pointer to the object handle
  * @param ta_num TA number (1 or 2)
  * 
@@ -513,12 +542,13 @@ TEE_Result internal_TEE_AllocateTransientObject(uint32_t objectType,
                                         TEE_ObjectHandle* object,
                                         uint8_t ta_num)
 {
+    // TODO: check TEE_KEYSIZE_NO_KEY
     if( (maxObjectSize == 0 || maxObjectSize % 8 != 0)){
         ERR_MSG("Invalid key sizze or null parameter");
         return TEE_ERROR_BAD_PARAMETERS;
     }
-    
-  
+
+
     if(check_mem_ownership(ta_num, (void*)object, sizeof(TEE_ObjectHandle)) == 0){
         ERR_MSG("Invalid object pointer");
         return TEE_ERROR_BAD_PARAMETERS;
@@ -550,6 +580,7 @@ TEE_Result internal_TEE_AllocateTransientObject(uint32_t objectType,
     // Allocate memory area to store the key
     obj->buffer = (char*)internal_TEE_Malloc(key_size*sizeof(char), TEE_MALLOC_FILL_ZERO, CORE_NUM);
     if(!obj->buffer){
+        // TODO: free_object!
         internal_TEE_Free(obj, CORE_NUM);
         ERR_MSG("Buffer allocation for transient object failed");
         return TEE_FAILED;
@@ -560,7 +591,7 @@ TEE_Result internal_TEE_AllocateTransientObject(uint32_t objectType,
     obj->obj_id = 0; //For transient objects it must be zero, it is just for persistent one
     obj->obj_storage_type = TEE_OBJ_TYPE_TRANSIENT;
     obj->ta_num = ta_num;
-    
+
     *object = (void*)obj;
 
     return TEE_SUCCESS;
@@ -569,15 +600,15 @@ TEE_Result internal_TEE_AllocateTransientObject(uint32_t objectType,
 
 /**
  * @brief Populate the attributes of a transient object
- * 
+ *
  * @param object pointer to the object handle
  * @param attrs pointer to the attributes
  * @param attrCount number of attributes
  * @param ta_num TA number (1 or 2)
- * 
+ *
  * @return TEE_SUCCESS if the attributes are populated successfully, TEE_FAILED otherwise
  */
-
+// TODO: Look at the GP documentation
 TEE_Result internal_TEE_PopulateTransientObject(TEE_ObjectHandle object,
                                 /*unused*/      TEE_Attribute* attrs, 
                                 /*unused*/      uint32_t attrCount,
@@ -587,7 +618,7 @@ TEE_Result internal_TEE_PopulateTransientObject(TEE_ObjectHandle object,
         ERR_MSG("Object does not belong to the calling TA");
         return TEE_ERROR_BAD_PARAMETERS;
     }
-   
+
     if(!check_mem_ownership(ta_num, (void*)attrs, sizeof(TEE_Attribute) * attrCount)){
         ERR_MSG("Invalid attributes pointer");
         return TEE_ERROR_BAD_PARAMETERS;
@@ -598,9 +629,12 @@ TEE_Result internal_TEE_PopulateTransientObject(TEE_ObjectHandle object,
     __TEE_ObjectHandle *temp_obj = (__TEE_ObjectHandle*)object;
 
     // Copy the attributes from the parameter to the object
+    // TODO: Buffer overflow! The object handle can have at most 4 attributes!
     for(uint32_t i=0; i<attrCount; i++)
     {
+        // TODO: Should not enforce that the attributes are coherent with the object type?
         temp_obj->attrs[i].attributeID = attrs[i].attributeID;
+        // TODO: is an arbitrary buffer ok?
         temp_obj->attrs[i].content.ref.buffer = attrs[i].content.ref.buffer;
         temp_obj->attrs[i].content.ref.length = attrs[i].content.ref.length;
         temp_obj->attrs[i].content.value.a = attrs[i].content.value.a;
@@ -612,7 +646,7 @@ TEE_Result internal_TEE_PopulateTransientObject(TEE_ObjectHandle object,
 
 /**
  * @brief Initialize a reference attribute
- * 
+ *
  * @param attr pointer to the attribute
  * @param attributeID attribute ID
  * @param buffer pointer to the buffer
@@ -629,16 +663,16 @@ void internal_TEE_InitRefAttribute(TEE_Attribute* attr, uint32_t attributeID,
     if(!check_mem_ownership(ta_num, (void*)attr, sizeof(TEE_Attribute))){
         return;
     }
-    
+
     attr->attributeID = attributeID;
     attr->content.ref.buffer = buffer;
     attr->content.ref.length = length;
-    
+
 }
 
 /**
  * @brief Initialize a value attribute
- * 
+ *
  * @param attr pointer to the attribute
  * @param attributeID attribute ID
  * @param a value a
@@ -655,7 +689,7 @@ void internal_TEE_InitValueAttribute(TEE_Attribute* attr, uint32_t attributeID,
     attr->attributeID = attributeID;
     attr->content.value.a = a;
     attr->content.value.b = b;
-    
+
 }
 
 /**
@@ -673,6 +707,8 @@ void internal_TEE_InitValueAttribute(TEE_Attribute* attr, uint32_t attributeID,
 TEE_Result internal_TEE_GetObjectBufferAttribute(TEE_ObjectHandle object, uint32_t attributeID,
                                  /*[outbuf]*/     void* buffer, size_t* size, uint8_t ta_num) 
 {
+    // TODO: not every attribute is extractable.
+    // TODO: response codes are not the one specified by GP.
     if(!check_object_ownership(ta_num, object)){
         return TEE_ERROR_BAD_PARAMETERS;
     }
@@ -680,6 +716,7 @@ TEE_Result internal_TEE_GetObjectBufferAttribute(TEE_ObjectHandle object, uint32
 
     __TEE_ObjectHandle *obj = (__TEE_ObjectHandle*)object;
 
+    // TODO: magic number.
     for(int i=0; i<4; i++)
     {
         if(obj->attrs[i].attributeID == attributeID)
@@ -687,6 +724,7 @@ TEE_Result internal_TEE_GetObjectBufferAttribute(TEE_ObjectHandle object, uint32
             if(!check_mem_ownership(ta_num, (void*)obj->attrs[i].content.ref.buffer, obj->attrs[i].content.ref.length)){
                 return TEE_ERROR_BAD_PARAMETERS;
             }
+            // TODO: buffer is not checked! Buffer overflow!
             if(!check_mem_ownership(ta_num, (void*)size, sizeof(size_t))){
                 return TEE_ERROR_BAD_PARAMETERS;
             }
@@ -713,6 +751,7 @@ TEE_Result internal_TEE_GetObjectBufferAttribute(TEE_ObjectHandle object, uint32
 TEE_Result internal_TEE_GetObjectValueAttribute(TEE_ObjectHandle object, uint32_t attributeID,
                                                             uint32_t* a, uint32_t* b, uint8_t ta_num)
 {
+    // TODO: not every attribute is extractable.
     if(!check_object_ownership(ta_num, object)){
         return TEE_ERROR_BAD_PARAMETERS;
     }
@@ -741,7 +780,7 @@ TEE_Result internal_TEE_GetObjectValueAttribute(TEE_ObjectHandle object, uint32_
 
 /**
  * @brief Free a transient object
- * 
+ *
  * @param object pointer to the object handle
  */
 void internal_TEE_FreeTransientObject(TEE_ObjectHandle object, uint8_t ta_num)
@@ -751,15 +790,18 @@ void internal_TEE_FreeTransientObject(TEE_ObjectHandle object, uint8_t ta_num)
     }
     __TEE_ObjectHandle *temp_obj = (__TEE_ObjectHandle*)object;
 
-    
+
     // Free the attributes if they are buffer
     for (int i=0; i<4; i++)
     {
+        // TODO: not the proper way to test if they are ref attributes.
+        // TODO: I think the buffer should be wiped.
         if(temp_obj->attrs[i].content.ref.buffer != NULL){
             temp_obj->attrs[i].content.ref.buffer = NULL;
-        }     
+        }
     }
     // Free the buffer if it is allocated
+    // TODO: I think it should be wiped!
     if (temp_obj->buffer != NULL){
         internal_TEE_Free(temp_obj->buffer, CORE_NUM);
         temp_obj->buffer = NULL;
@@ -778,6 +820,7 @@ void internal_TEE_FreeTransientObject(TEE_ObjectHandle object, uint8_t ta_num)
  */
 void internal_TEE_CloseObject(TEE_ObjectHandle object, uint8_t ta_num)
 {
+    // TODO: should be equivalent to TEE_FreeTransientObject if the object is transient by GP documentation!
     if(!check_object_ownership(ta_num, object)){
         return;
     }
@@ -1598,10 +1641,10 @@ static uint32_t get_keySize(uint32_t objectType)
 /**
  * @brief Check if the expected key len in bytes, according to the given TEE CORE API crypto algorithm type,
  *  matches the given key len
- * 
+ *
  * @param alg TEE Core API crypto algorithm
  * @param key_len key length in bytes to check
- * 
+ *
  * @return if it's success, returns 0 else -1
 */
 static int8_t check_keySize(uint32_t alg, uint32_t key_len)

@@ -2,6 +2,7 @@
 #include "stm32l4xx_hal.h"
 #include "core_cm4.h"
 #include "it.h"
+#include "scheduler.h"
 
 #define PRIGROUP_MASK	0b11100000000
 #define PRIGROUP_SHIFT	8
@@ -16,7 +17,7 @@
  * Returns:
  * execution priority of the specified exception
  */
-int Get_Exception_Priority(int exception_number) {
+static int get_exception_priority(int exception_number) {
 	uint8_t pri_bits;
 	/* Fixed priorities handlers */
 	switch (exception_number)
@@ -40,6 +41,28 @@ int Get_Exception_Priority(int exception_number) {
 	pri_bits = pri_bits >> (pri_group + 1);	// isolate group priority
 	
 	return pri_bits;
+}
+
+
+static void set_exc_priority(int exc_priority) {
+    if (exc_priority < 0) {
+        soft_reset();
+    } else if (exc_priority == 0) {
+        // TODO: use PRIMASK.
+    } else {
+        // TODO: use BASEPRI = exc_priority.
+    }
+}
+
+static void (*)() get_original_handler(int exc_number) {
+
+    if (exc_number < 1 || exc_number > MAX_EXC_NUMBER) {
+        soft_reset();
+    }
+
+    void (*isr_table)[]() = __flash_start__;
+    return isr_table[exc_number];
+
 }
 
 /**
@@ -71,212 +94,53 @@ int Get_Exception_Priority(int exception_number) {
  * form the Exception_Simulator routine.
  * 
  */
-__attribute__((naked)) void Exception_Catcher() {
-	__asm__(
-		/* Disable interrupts, note that FAULTMASK will be cleared on return from exception */
-		"cpsid if\n"
+static void _exception_catcher(Context *ctx) {
+    // TODO: save BASEPRI.
+    // TODO: save virtual_IPSR.
+    // TODO: the original implementation cared about padding. Must be managed by the scheduler.
 
-		/* Save BASEPRI (execution priority of pre-empted code) and EXC_RETURN */
-		"mrs r0, BASEPRI\n"
-		"push {r0,lr}\n"
+    int exc_number = __IPSR();
+    int exc_priority = get_exception_priority(exc_number);
 
-		/* Save virtual_IPSR and padding (to preserve stack alingment) */
-		"ldr r0, =_virtual_IPSR\n"
-		"ldr r0, [r0]\n"
-		"mvn r1, #0\n"
-		"push {r0,r1}\n"
-		
-		/* Set CTRL.nPRIV to 0 (must allow Execution Simulator to act in privileged mode) */
-		"mrs r0, CONTROL\n"
-		"and r0, #0\n"
-		"msr CONTROL, r0\n"
+    _virtual_IPSR = exc_number;
 
-		/* Save remaining context to MSP */
-		"push {r4,r5,r6,r7,r8,r9,r10,r11}\n"
+    scheduler_schedule(ctx, COMPONENT_CA, get_original_handler(exc_number), Exception_Return_Handler);
 
-		/* Create fake return frame */
-		"mov r7, #0x1000000\n"	// xPSR (thumb bit to 1, everything else 0)
-		"ldr r6, =Exception_Simulator\n"	// Set the address of Exception_Simulator function as RetAddr
-		// r5 (LR value) dont care
-		// r4 (r12 value) dont care
-		// r3 SVC number (only during SVC handling)
-		// r2 dont care
-		"mrs r0, IPSR\n" // set exception to execute
-		"push {r3}\n"
-		"bl Get_Exception_Priority\n" // get priority of the exception (return value saved in r0)
-		"pop {r3}\n"
-		"mov r1, r0\n"	// execution priority
-		"mrs r0, IPSR\n"	// set exception to execute
-		// MSP will point to custom frame after return from exception
 
-		/* Save fake return frame on MSP */
-		"push {r0,r1,r2,r3,r4,r5,r6,r7}\n" 
-		
-		/* Setup EXC_RETURN */
-		"ldr lr, =0xfffffff9\n"	// always return to Thread mode with Main stack in use
+    ctx->auto_frame->XPSR = 0x01000000;
+    ctx->auto_frame->r0 = svc_number;
+    ctx->manual_frame.EXC_RETURN = EXC_RETURN_THREAD_PSP;
 
-		/* Return and execute Exception_Simulator right after it (due to the fake return frame created)*/
-		"bx lr\n"
-	);
+    set_exc_priority(exc_priority);
+
 }
 
-/**
- * Executes ISR without privileges
- * Works only when two assumptions are satisfied:
- * 1. The ISR never uses any context form the pre-empted code
- * (in particular: registers r0-r3, r12, pre-entry-sp, lr)
- * 2. The ISR leaves the MSP in the same state after its execution
- * (key information needs to be retrieved from stack after execution)
- * 
- * After the execution of the ISR the function should re-gain privileges and setup
- * for the return to the pre-empted execution, unfortunatly this cannot be done
- * straightforward for two reasons:
- * 1. CONTROL.nPRIV is set to 1 (no privileges) and cannot be changed from Thread mode.
- * 2. Writes to EPSR are ignored, meaning that the only way to restore the context is with
- * a proper exception return.
- * 
- * For these reason a HardFault is triggered on purpuse after the ISR request
- * This HardFault is used to perform the return to the pre-empted execution.
- * 
- * Parameters:
- * - exception_number: number of the exception 
- * - exception_priority: execution priority of the exception
- */
-__attribute__((naked, section(".microvisor-nopri"))) void Exception_Simulator(int exception_number, int exception_priority) {
-	__asm__(
-		/* Set virtual IPSR value */
-		"ldr r2, =_virtual_IPSR\n"
-		"str r0, [r2]\n" // Store in the virtual_IRSR the exception number (passed as parameter in r0)
 
-		/* Set execution priority */
-		"cmp r1, #0\n"
-		"blt .PRI_ERROR\n"	// requested priority greater than 0 (e.g -1): error
-		"cmp r1, #0\n"
-		"beq .PRI_SET\n"	// requested priority 0, already set (branch to .PRI_SET label)
-		"msr BASEPRI, r1\n"	// requested priority lower than 0, set BASEPRI
-		"cpsie i\n"			// and enable interrupts
-		"b .PRI_SET\n"
-		".PRI_ERROR:\n"   // in case of error, trigger a soft reset
-		"bkpt\n"
-		"b soft_reset\n"
-		".PRI_SET:\n"
-
-		/* Remove privilege inside thread mode */
-		"mrs r2, CONTROL\n"
-		"orr r2, r2, #1\n"
-		"msr CONTROL, r2\n"
-		
-		/* Execute ISR */
-		"ldr r2, =__flash_start__\n"	// load original vector table address
-		"ldr r2, [r2, r0, lsl #2]\n"	// load handler address: base vector table (r2) + exception offset(r0)
-		"mov r0, r3\n"	// copy SVC num to r0 in case of SVC interrupt being handled
-		"pop {r4,r5,r6,r7,r8,r9,r10,r11}\n"	// restore partial context (r4-r11)
-		"blx r2\n"	// branch to handler (to perform the ISR)
-		
-		/* Trigger HardFault to perform return sequence */
-		/* Since we are executing unprivileged code, an access to the PPB will trigger a HardFault */
-		".global EXC_RET_START\n" // define a globally visible label to be used in the exception return handler
-		".global EXC_RET_END\n"  // define a globally visible label to be used in the exception return handler
-		"EXC_RET_START:\n"
-		"ldr r0, =0xe000e000\n"	// load SCB address
-		"ldrt r0, [r0]\n"	// perfom unprivileged read
-		".LOOP:\n"	// wait for HardFault
-		"b .LOOP\n"
-		"EXC_RET_END:\n"
-	);
+__attribute__((naked))
+void Exception_Catcher() {
+    // Delegate the call to scheduler_handle_context that must call _exception_catcher.
+    // Executes in-register to avoid modification to sp. Also only caller-preserved registers are used.
+    __asm__ volatile (
+        "ldr a0, =_exception_handler\n"
+        "bx scheduler_handle_context\n"
+    );
 }
+
 
 /**
  * Performs exception return to previosly pre-empted execution
  * setting correctly the priority and the context.
  * Only done when the HardFault originates form a pre-determined instruction range
  * (within the Exception_Simulator function).
- * 
+ *
  * Parameters:
  * - auto_frame: pointer to frame created automatically during exception entry
  */
-__attribute__((naked)) void Exception_Return_Handler(unsigned int* auto_frame) {
-	__asm__(
-		"ldr r2, [r0, #24]\n"	// load faulty address (PC value before exception)
-		
-		/** 
-		  * Check if a exception return was requested after the execution of a deprioritized handler
-		  * This is done by comparing the address that caused the Hard Fault with boundries
-		  * The addresses boundries are defined globally when simulating an exception 
-		*/
-		"ldr r3, =EXC_RET_START\n"
-		"cmp r2, r3\n"
-		"blo .NO_EXC_RET_REQUESTED\n" // PC is less than EXC_RET_START, no exception return was requested
-		"ldr r3, =EXC_RET_END\n"
-		"cmp r2, r3\n"
-		"bhi .NO_EXC_RET_REQUESTED\n" // PC is greater than EXC_RET_END, no exception return was requested
+void Exception_Return_Handler(Context *ctx) {
 
-		/* Exception return from deprioritezed handler requested */
-		"add sp, #4\n"	// remove pushed LR (before function call) form MSP
-		"cmp sp, r0\n"	// check where auto_frame is stored
-		"itee eq\n"
-		"addeq sp, #32\n"	// auto_frame stored on MSP, remove it
-		"addne r0, #32\n"	// auto_frame stored on PSP: decrease pointer
-		"msrne PSP, r0\n"	// and update PSP
+    // TODO: clear CFSR.
+    // TODO: restore virtual_IPSR from CTX.
+    // TODO: restore BASEPRI.
+    // TODO: disable PRIMASK.
 
-		/* Clear CFSR (Configurable Fault Status Register) as the value was changed by the HardFault triggered on purpose */
-		"ldr r2, =0xE000ED28\n" 
-		"ldr r3, =0xFFFFFFFF\n" // clear all bits
-		"str r3, [r2]\n"
-
-		/* Restore virtual_IPSR and remove padding (to preserve stack alingment) */
-		"pop {r2, r3}\n"	// unstack virtual_IPSR and padding
-		"ldr r3, =_virtual_IPSR\n"
-		"str r2, [r3]\n"
-
-		/* Read and set BASEPRI */
-		"pop {r3}\n"
-		"msr BASEPRI, r3\n"
-		/* Disable PRIMASK */
-		"cpsie i\n"
-		/* Write EXC_RETURN value to LR to perform the return from the exception */
-		"pop {lr}\n"
-		
-		/**
-		 *  No exeption return requested, check if a return from a Global Platform API was requested instead 
-		 *  This is done by comparing the address that caused the Hard Fault with boundries
-		 *  The addresses boundries are defined globally when calling the API 
-		 */
-		".NO_EXC_RET_REQUESTED:\n"
-		"ldr r3, =API_RET_START\n"
-		"cmp r2, r3\n"
-		"blo .NO_API_RET_REQUESTED\n" // PC is less than API_RET_START, no return from api call was requested (return)
-		"ldr r3, =API_RET_END\n"
-		"cmp r2, r3\n"
-		"bhi .NO_API_RET_REQUESTED\n" // PC is greater than API_RET_END, no return from api call was requested (return)
-
-		/* API return requested */
-		"add sp, #4\n"	// remove pushed LR (before function call) form MSP
-		"cmp sp, r0\n"	// check where auto_frame is stored
-		"itee eq\n"
-		"addeq sp, #32\n"	// auto_frame stored on MSP, remove it
-		"addne r0, #32\n"	// auto_frame stored on PSP: decrease pointer
-		"msrne PSP, r0\n"	// and update PSP
-
-		/* Clear CFSR (Configurable Fault Status Register) as the value was changed by the HardFault triggered on purpose */
-		"ldr r2, =0xE000ED28\n" 
-		"ldr r3, =0xFFFFFFFF\n" // clear all bits
-		"str r3, [r2]\n"
-
-		/* Read and set BASEPRI */
-		"pop {r3}\n"
-		"msr BASEPRI, r3\n"
-		/* Disable PRIMASK */
-		"cpsie i\n"
-		/** 
-		 * Reconfigure back the MPU to the original configuration used before the API call
-		 * This enforce isolation and separation between TA and client applications
-		 */
-		"blx Configure_MPU\n"
-		/* Write EXC_RETURN value to LR to perform the return from the exception (to the code called before the API call) */
-		"pop {lr}\n"
-
-		".NO_API_RET_REQUESTED:\n"
-		"bx lr\n"
-	);
 }
